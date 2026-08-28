@@ -1,0 +1,34 @@
+dataset: cadets
+
+parser:
+  streaming: true
+  split_mode: magic
+  keep_raw_actor_object: true
+  derive_information_flow: true
+
+node_types:
+  - PROCESS
+  - FILE
+  - SOCKET
+
+episode:
+  enabled: true
+  max_duration_sec: 600
+  inactivity_gap_sec: 120
+
+sampler:
+  backward_hops: 1
+  forward_hops: 2
+  backward_context_sec: 60
+  forward_context_sec: 120
+  max_nodes: 256
+  max_edges: 1024
+  min_nodes: 2
+
+labels:
+  primary: threatrace
+
+export:
+  format: pyg_heterodata
+  samples_per_shard: 1000
+

@@ -1,0 +1,19 @@
+[project]
+name = "e3-subgraph-builder"
+version = "0.1.0"
+description = "DARPA TC E3 canonical event store and process-centered subgraph builder."
+requires-python = ">=3.9"
+dependencies = [
+  "matplotlib",
+  "networkx",
+  "pandas",
+  "pyarrow",
+  "pyyaml",
+  "scikit-learn",
+  "torch",
+  "torch-geometric",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
