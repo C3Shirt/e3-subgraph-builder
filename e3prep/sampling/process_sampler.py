@@ -11,6 +11,9 @@ from e3prep.sampling.episodes import NANOSECONDS, build_process_episodes, proces
 from e3prep.schema.samples import ProcessEpisode, SubgraphSample
 
 
+MVP_NODE_TYPES = ("PROCESS", "FILE", "SOCKET")
+
+
 @dataclass
 class SamplerConfig:
     backward_hops: int = 1
@@ -23,6 +26,7 @@ class SamplerConfig:
     label_strategy: str = "center"
     max_edges_per_pair: int | None = None
     max_edges_per_expansion_node: int | None = None
+    allowed_node_types: tuple[str, ...] = MVP_NODE_TYPES
 
 
 class LabelStore:
@@ -58,17 +62,6 @@ class LabelStore:
         if not self.positive_uuids:
             return 0
         return sum(1 for node in nodes if str(node).upper() in self.positive_uuids)
-
-    def event_touches_positive(self, event) -> bool:
-        if not self.positive_uuids:
-            return False
-        return (
-            event.actor_uuid.upper() in self.positive_uuids
-            or event.object_uuid.upper() in self.positive_uuids
-            or event.flow_src_uuid.upper() in self.positive_uuids
-            or event.flow_dst_uuid.upper() in self.positive_uuids
-        )
-
 
 class ProcessSubgraphSampler:
     def __init__(
@@ -132,7 +125,6 @@ class ProcessSubgraphSampler:
             max_edges=cfg.max_edges,
             midpoint_ns=midpoint_ns,
             max_edges_per_pair=cfg.max_edges_per_pair,
-            positive_uuids=self.labels.positive_uuids,
         )
         if len(nodes) < cfg.min_nodes or not edges:
             return None
@@ -208,12 +200,11 @@ class ProcessSubgraphSampler:
                 else:
                     edges = self.index.outgoing_edges(node_uuid, context_start_ns, context_end_ns)
                     neighbor_column = "flow_dst_uuid"
-                edge_list = list(edges)
+                edge_list = [event for event in edges if self._edge_allowed_by_node_type(event)]
                 if self.config.max_edges_per_expansion_node:
                     edge_list = sorted(
                         edge_list,
                         key=lambda event: (
-                            0 if self.labels.event_touches_positive(event) else 1,
                             abs(event.timestamp_ns - midpoint_ns),
                             event.sequence or 0,
                             event.event_edge_id,
@@ -230,3 +221,7 @@ class ProcessSubgraphSampler:
                         next_frontier.add(neighbor)
             visited.update(next_frontier)
             frontier = next_frontier
+
+    def _edge_allowed_by_node_type(self, event) -> bool:
+        allowed = {node_type.upper() for node_type in self.config.allowed_node_types}
+        return event.flow_src_type.upper() in allowed and event.flow_dst_type.upper() in allowed

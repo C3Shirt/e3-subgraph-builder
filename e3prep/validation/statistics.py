@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Mapping
 
 import pandas as pd
 
@@ -18,7 +19,38 @@ def describe_series(series: pd.Series) -> dict:
     }
 
 
-def build_dataset_report(store_dir: Path, subgraph_dir: Path | None = None) -> dict:
+def _subgraph_dirs_mapping(subgraph_dirs: Path | Mapping[str, Path] | None) -> dict[str, Path]:
+    if subgraph_dirs is None:
+        return {}
+    if isinstance(subgraph_dirs, Path):
+        return {subgraph_dirs.name: subgraph_dirs}
+    return {str(split): Path(path) for split, path in subgraph_dirs.items()}
+
+
+def _read_metadata_frames(subgraph_dirs: Mapping[str, Path]) -> pd.DataFrame:
+    frames = []
+    columns = ["sample_id", "split", "label", "n_nodes", "n_edges"]
+    for split, subgraph_dir in sorted(subgraph_dirs.items()):
+        metadata_path = subgraph_dir / "metadata.parquet"
+        if not metadata_path.exists():
+            continue
+        frame = read_parquet(metadata_path, columns=columns, allow_missing_columns=True)
+        frame["split"] = frame["split"].fillna(split)
+        frames.append(frame)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def _subgraph_stats(metadata: pd.DataFrame) -> dict:
+    return {
+        "subgraphs_total": int(len(metadata)),
+        "positive_subgraphs": int((metadata["label"] == 1).sum()),
+        "negative_subgraphs": int((metadata["label"] == 0).sum()),
+        "nodes_per_subgraph": describe_series(metadata["n_nodes"]),
+        "edges_per_subgraph": describe_series(metadata["n_edges"]),
+    }
+
+
+def build_dataset_report(store_dir: Path, subgraph_dir: Path | Mapping[str, Path] | None = None) -> dict:
     entities_path = store_dir / "entities.parquet"
     events_path = store_dir / "events.parquet"
     labels_path = store_dir / "labels.parquet"
@@ -55,12 +87,15 @@ def build_dataset_report(store_dir: Path, subgraph_dir: Path | None = None) -> d
 
     report["malicious_entity_count"] = int((labels["label"] == 1).sum()) if not labels.empty else 0
 
-    metadata_path = subgraph_dir / "metadata.parquet" if subgraph_dir else None
-    if metadata_path and metadata_path.exists():
-        metadata = read_parquet(metadata_path, columns=["label", "n_nodes", "n_edges"])
-        report["subgraphs_total"] = int(len(metadata))
-        report["positive_subgraphs"] = int((metadata["label"] == 1).sum())
-        report["negative_subgraphs"] = int((metadata["label"] == 0).sum())
-        report["nodes_per_subgraph"] = describe_series(metadata["n_nodes"])
-        report["edges_per_subgraph"] = describe_series(metadata["n_edges"])
+    subgraph_dirs = _subgraph_dirs_mapping(subgraph_dir)
+    if subgraph_dirs:
+        report["subgraph_dirs"] = {split: str(path) for split, path in sorted(subgraph_dirs.items())}
+    metadata = _read_metadata_frames(subgraph_dirs)
+    if not metadata.empty:
+        report.update(_subgraph_stats(metadata))
+        report["subgraphs_by_split"] = metadata["split"].value_counts().sort_index().astype(int).to_dict()
+        report["subgraph_stats_by_split"] = {
+            str(split): _subgraph_stats(group)
+            for split, group in metadata.groupby("split")
+        }
     return report

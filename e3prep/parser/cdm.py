@@ -359,3 +359,30 @@ class CdmJsonParser(CdmParser):
                 object_role=object_role,
                 source_file=os.fspath(source_file),
             )
+
+    def event_timestamp_range(
+        self,
+        paths: Iterable[Path],
+        progress_every: Optional[int] = None,
+    ) -> dict:
+        min_ts: int | None = None
+        max_ts: int | None = None
+        events_seen = 0
+        current_file: Path | None = None
+        for source_file, _line_no, record in iter_jsonl_records(list(paths), include_patterns=("Event",)):
+            if progress_every and source_file != current_file:
+                current_file = source_file
+                print(f"[timestamp-pass] reading {source_file}", flush=True)
+            record_type, payload, _raw_type = unwrap_datum(record)
+            if record_type != "Event" or payload is None:
+                continue
+            timestamp = unwrap_union(payload.get("timestampNanos"))
+            if timestamp is None:
+                continue
+            timestamp = int(timestamp)
+            min_ts = timestamp if min_ts is None else min(min_ts, timestamp)
+            max_ts = timestamp if max_ts is None else max(max_ts, timestamp)
+            events_seen += 1
+            if progress_every and events_seen % progress_every == 0:
+                print(f"[timestamp-pass] events={events_seen} min={min_ts} max={max_ts}", flush=True)
+        return {"min": min_ts, "max": max_ts, "events_with_timestamp": events_seen}

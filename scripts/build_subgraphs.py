@@ -12,7 +12,7 @@ import pandas as pd
 from e3prep.export.shards import write_pyg_shards
 from e3prep.graph.index import build_or_load_temporal_index, ensure_event_edge_ids
 from e3prep.io import read_parquet, write_json
-from e3prep.sampling.process_sampler import ProcessSubgraphSampler, SamplerConfig
+from e3prep.sampling.process_sampler import MVP_NODE_TYPES, ProcessSubgraphSampler, SamplerConfig
 
 
 EVENT_COLUMNS_FOR_BUILD = [
@@ -65,12 +65,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--labeled-centers-only",
         action="store_true",
-        help="Restrict sampling to positive labels that are also PROCESS entities.",
+        help="DIAGNOSTIC-ONLY. Restrict sampling to positive labels that are also PROCESS entities.",
     )
     parser.add_argument(
         "--centers-touching-labels",
         action="store_true",
-        help="Restrict sampling to process UUIDs whose events touch any positive labeled UUID.",
+        help="DIAGNOSTIC-ONLY. Restrict sampling to process UUIDs whose events touch any positive labeled UUID.",
+    )
+    parser.add_argument(
+        "--allow-diagnostic-label-selection",
+        action="store_true",
+        help="Required to use --labeled-centers-only or --centers-touching-labels. Do not use for formal datasets.",
+    )
+    parser.add_argument(
+        "--node-type",
+        action="append",
+        default=[],
+        help="Node type allowed in sampled subgraphs. Defaults to PROCESS, FILE, SOCKET. May be repeated.",
     )
     parser.add_argument("--center-limit", type=int, default=None, help="Limit candidate center UUIDs after sorting.")
     parser.add_argument(
@@ -175,6 +186,11 @@ def index_cache_key(events_path: Path, split: str, rows: int) -> dict:
 
 def main() -> None:
     args = parse_args()
+    if (args.labeled_centers_only or args.centers_touching_labels) and not args.allow_diagnostic_label_selection:
+        raise ValueError(
+            "--labeled-centers-only and --centers-touching-labels are diagnostic-only. "
+            "Pass --allow-diagnostic-label-selection for exploratory runs; omit them for formal dataset builds."
+        )
     events_path = args.store_dir / "events.parquet"
     entities = read_parquet(args.store_dir / "entities.parquet", columns=ENTITY_COLUMNS_FOR_BUILD)
     labels_path = args.store_dir / "labels.parquet"
@@ -193,6 +209,7 @@ def main() -> None:
         label_strategy=args.label_strategy,
         max_edges_per_pair=args.max_edges_per_pair,
         max_edges_per_expansion_node=args.max_edges_per_expansion_node,
+        allowed_node_types=tuple(node_type.upper() for node_type in (args.node_type or MVP_NODE_TYPES)),
     )
 
     summary = {}
@@ -247,6 +264,16 @@ def main() -> None:
         )
         summary[split]["candidate_centers"] = None if center_uuids is None else len(center_uuids)
         summary[split]["label_strategy"] = args.label_strategy
+        summary[split]["node_type_policy"] = {
+            "sampled_node_types": list(cfg.allowed_node_types),
+            "canonical_tables_keep_all_types": True,
+        }
+        summary[split]["diagnostic_label_selection"] = {
+            "enabled": bool(args.labeled_centers_only or args.centers_touching_labels),
+            "labeled_centers_only": bool(args.labeled_centers_only),
+            "centers_touching_labels": bool(args.centers_touching_labels),
+            "formal_dataset_eligible": not bool(args.labeled_centers_only or args.centers_touching_labels),
+        }
         summary[split]["index_cache"] = None if cache_path is None else str(cache_path)
         summary[split]["index_source"] = index_source
     write_json(summary, args.out_dir / "subgraph_build_summary.json")

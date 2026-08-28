@@ -2,14 +2,16 @@ dataset: cadets
 
 parser:
   streaming: true
-  split_mode: magic
+  split_mode: chronological_disjoint
   keep_raw_actor_object: true
   derive_information_flow: true
 
-node_types:
-  - PROCESS
-  - FILE
-  - SOCKET
+node_type_policy:
+  canonical_tables_keep_all_types: true
+  sampled_node_types:
+    - PROCESS
+    - FILE
+    - SOCKET
 
 episode:
   enabled: true
@@ -31,4 +33,3 @@ labels:
 export:
   format: pyg_heterodata
   samples_per_shard: 1000
-

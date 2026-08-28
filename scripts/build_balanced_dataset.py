@@ -15,7 +15,12 @@ from e3prep.io import read_parquet, write_json, write_parquet_records
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build a fixed balanced dataset from existing subgraph shards.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Build a fixed balanced dataset from existing subgraph shards for quick sanity experiments only. "
+            "Do not use this output as a formal test set."
+        )
+    )
     parser.add_argument("--source-dir", action="append", type=Path, required=True)
     parser.add_argument("--out-dir", required=True, type=Path)
     parser.add_argument("--samples-per-class", type=int, default=None)
@@ -172,6 +177,9 @@ def main() -> None:
     summary = {
         "source_dirs": [str(path) for path in args.source_dir],
         "out_dir": str(args.out_dir),
+        "purpose": "sanity_only_balanced_experiment",
+        "formal_test_set_eligible": False,
+        "selection_policy": "balanced_by_label_with_positive_node_count_filters",
         "samples": int(len(selected)),
         "shards": shards,
         "samples_per_class": selected["label"].value_counts().sort_index().astype(int).to_dict(),

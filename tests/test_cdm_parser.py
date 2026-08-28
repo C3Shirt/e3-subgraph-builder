@@ -4,8 +4,9 @@ import json
 from pathlib import Path
 
 from e3prep.graph.direction import derive_information_flow, relation_name
-from e3prep.parser.cadets import discover_json_chunks
+from e3prep.parser.cadets import discover_json_chunks, resolve_split_paths, split_mode_warnings
 from e3prep.parser.cdm import CdmJsonParser
+from scripts.parse import assign_chronological_split, chronological_policy
 
 
 CDM = "com.bbn.tc.schema.avro.cdm18"
@@ -130,3 +131,42 @@ def test_discover_json_chunks_filters_dataset_prefix(tmp_path: Path) -> None:
     discovered = [path.name for path in discover_json_chunks(tmp_path, "cadets")]
 
     assert discovered == ["ta1-cadets-e3-official.json", "ta1-cadets-e3-official.json.1"]
+
+
+def test_resolve_chronological_split_uses_all_dataset_chunks(tmp_path: Path) -> None:
+    for name in [
+        "ta1-cadets-e3-official.json",
+        "ta1-cadets-e3-official.json.1",
+        "ta1-theia-e3-official-6r.json",
+    ]:
+        (tmp_path / name).write_text("{}", encoding="utf-8")
+
+    split_paths = resolve_split_paths("cadets", tmp_path, split_mode="chronological_disjoint")
+
+    assert list(split_paths) == ["all"]
+    assert [path.name for path in split_paths["all"]] == [
+        "ta1-cadets-e3-official.json",
+        "ta1-cadets-e3-official.json.1",
+    ]
+
+
+def test_chronological_policy_assigns_train_val_test_intervals() -> None:
+    policy = chronological_policy(
+        {"min": 0, "max": 1000, "events_with_timestamp": 10},
+        val_fraction=0.25,
+        test_fraction=0.2,
+    )
+
+    assert policy["val_start_ns"] == 600
+    assert policy["test_start_ns"] == 800
+    assert assign_chronological_split(599, policy) == "train"
+    assert assign_chronological_split(600, policy) == "val"
+    assert assign_chronological_split(799, policy) == "val"
+    assert assign_chronological_split(800, policy) == "test"
+    assert assign_chronological_split(None, policy) == "train"
+
+
+def test_trace_magic_reproduction_is_warned_as_nonformal() -> None:
+    warnings = split_mode_warnings("trace", "magic_reproduction")
+
+    assert any("not eligible for formal results" in warning for warning in warnings)

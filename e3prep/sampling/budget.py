@@ -1,23 +1,12 @@
 from __future__ import annotations
 
 
-def edge_touches_any(edge: dict, uuids: set[str] | None) -> bool:
-    if not uuids:
-        return False
-    return any(
-        str(edge.get(column, "")).upper() in uuids
-        for column in ("actor_uuid", "object_uuid", "flow_src_uuid", "flow_dst_uuid")
-    )
-
-
-def edge_rank_key(edge: dict, center_uuid: str, midpoint_ns: int, positive_uuids: set[str] | None = None) -> tuple:
+def edge_rank_key(edge: dict, center_uuid: str, midpoint_ns: int) -> tuple:
     timestamp_ns = int(edge.get("timestamp_ns") or midpoint_ns)
     touches_center = edge.get("flow_src_uuid") == center_uuid or edge.get("flow_dst_uuid") == center_uuid
-    touches_positive = edge_touches_any(edge, positive_uuids)
     return (
         int(edge.get("_hop", 999)),
         0 if touches_center else 1,
-        0 if touches_positive else 1,
         abs(timestamp_ns - midpoint_ns),
         str(edge.get("_direction", "")),
         str(edge.get("event_edge_id", "")),
@@ -32,9 +21,8 @@ def apply_budget(
     max_edges: int,
     midpoint_ns: int,
     max_edges_per_pair: int | None = None,
-    positive_uuids: set[str] | None = None,
 ) -> tuple[list[dict], dict[str, str]]:
-    ranked_edges = sorted(edges, key=lambda edge: edge_rank_key(edge, center_uuid, midpoint_ns, positive_uuids))
+    ranked_edges = sorted(edges, key=lambda edge: edge_rank_key(edge, center_uuid, midpoint_ns))
     kept_edges: list[dict] = []
     kept_nodes: dict[str, str] = {center_uuid: "PROCESS"}
     pair_counts: dict[tuple[str, str, str], int] = {}

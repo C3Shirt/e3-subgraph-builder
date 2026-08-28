@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Mapping
 
 import pandas as pd
 
 from e3prep.io import read_parquet
+from e3prep.validation.leakage import read_subgraph_parquet_frames, subgraph_dirs_mapping
 
 
 def _uuid_key_series(series: pd.Series) -> pd.Series:
@@ -31,12 +33,10 @@ def _by_type_for_labels(labels: set[str], entities: pd.DataFrame) -> dict[str, i
     return rows["node_type"].fillna("UNKNOWN").value_counts().sort_index().astype(int).to_dict()
 
 
-def label_coverage_report(store_dir: Path, subgraph_dir: Path | None = None) -> dict:
+def label_coverage_report(store_dir: Path, subgraph_dir: Path | Mapping[str, Path] | None = None) -> dict:
     labels_path = store_dir / "labels.parquet"
     entities_path = store_dir / "entities.parquet"
     events_path = store_dir / "events.parquet"
-    metadata_path = subgraph_dir / "metadata.parquet" if subgraph_dir else None
-    nodes_path = subgraph_dir / "nodes.parquet" if subgraph_dir else None
 
     labels = read_parquet(labels_path, columns=["uuid", "label"]) if labels_path.exists() else pd.DataFrame()
     entities = read_parquet(entities_path, columns=["uuid", "node_type"]) if entities_path.exists() else pd.DataFrame()
@@ -45,12 +45,9 @@ def label_coverage_report(store_dir: Path, subgraph_dir: Path | None = None) -> 
         if events_path.exists()
         else pd.DataFrame()
     )
-    metadata = (
-        read_parquet(metadata_path, columns=["center_uuid", "label"])
-        if metadata_path and metadata_path.exists()
-        else pd.DataFrame()
-    )
-    nodes = read_parquet(nodes_path, columns=["uuid"]) if nodes_path and nodes_path.exists() else pd.DataFrame()
+    subgraph_dirs = subgraph_dirs_mapping(subgraph_dir)
+    metadata = read_subgraph_parquet_frames(subgraph_dirs, "metadata.parquet", ["center_uuid", "label", "split"])
+    nodes = read_subgraph_parquet_frames(subgraph_dirs, "nodes.parquet", ["uuid", "split"])
 
     positive_labels = set()
     if not labels.empty:
@@ -89,6 +86,21 @@ def label_coverage_report(store_dir: Path, subgraph_dir: Path | None = None) -> 
     if not metadata.empty:
         report["positive_subgraphs"] = int((metadata["label"] == 1).sum())
         report["negative_subgraphs"] = int((metadata["label"] == 0).sum())
+        report["positive_subgraphs_by_split"] = (
+            metadata[metadata["label"] == 1]["split"].value_counts().sort_index().astype(int).to_dict()
+        )
+        report["negative_subgraphs_by_split"] = (
+            metadata[metadata["label"] == 0]["split"].value_counts().sort_index().astype(int).to_dict()
+        )
+        report["labels_in_subgraph_centers_by_split"] = {
+            str(split): int(len(positive_labels & _uuid_set(group, "center_uuid")))
+            for split, group in metadata.groupby("split")
+        }
+    if not nodes.empty:
+        report["labels_in_subgraph_nodes_by_split"] = {
+            str(split): int(len(positive_labels & _uuid_set(group, "uuid")))
+            for split, group in nodes.groupby("split")
+        }
     if not events.empty and "split" in events.columns:
         per_split = {}
         for split, group in events.groupby("split"):

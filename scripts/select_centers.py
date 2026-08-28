@@ -17,7 +17,12 @@ EVENT_COLUMNS = ["split", "actor_uuid", "actor_type", "object_uuid", "object_typ
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Select process center UUIDs for controlled subgraph sampling.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "DIAGNOSTIC-ONLY. Select process center UUIDs for controlled subgraph sampling. "
+            "Do not use label-aware center lists for formal dataset construction."
+        )
+    )
     parser.add_argument("--store-dir", required=True, type=Path)
     parser.add_argument("--split", required=True)
     parser.add_argument(
@@ -81,6 +86,8 @@ def main() -> None:
         "store_dir": str(args.store_dir),
         "split": args.split,
         "mode": args.mode,
+        "diagnostic_only": True,
+        "formal_dataset_eligible": False,
         "positive_labels": len(positive_uuids),
         "requested_count": args.count,
         "seed": args.seed,

@@ -208,10 +208,11 @@ def test_temporal_index_cache_roundtrip(tmp_path: Path) -> None:
     assert loaded_index.events[0].event_edge_id == built_index.events[0].event_edge_id
 
 
-def test_budget_prioritizes_edges_touching_positive_labels() -> None:
+def test_budget_is_not_label_aware() -> None:
     edges = [
         {
             "event_uuid": "E0",
+            "event_edge_id": "EE0",
             "event_type": "EVENT_WRITE",
             "timestamp_ns": 10,
             "flow_src_uuid": "P1",
@@ -221,6 +222,7 @@ def test_budget_prioritizes_edges_touching_positive_labels() -> None:
         },
         {
             "event_uuid": "E1",
+            "event_edge_id": "EE1",
             "event_type": "EVENT_WRITE",
             "timestamp_ns": 100,
             "flow_src_uuid": "P1",
@@ -236,8 +238,71 @@ def test_budget_prioritizes_edges_touching_positive_labels() -> None:
         max_nodes=2,
         max_edges=1,
         midpoint_ns=0,
-        positive_uuids={"F1"},
     )
 
-    assert [edge["event_uuid"] for edge in kept] == ["E1"]
-    assert "F1" in nodes
+    assert [edge["event_uuid"] for edge in kept] == ["E0"]
+    assert "F1" not in nodes
+
+
+def test_process_sampler_mvp_node_type_policy_filters_other_types() -> None:
+    entities = pd.DataFrame(
+        [
+            {"uuid": "P1", "node_type": "PROCESS", "name": "bash"},
+            {"uuid": "F1", "node_type": "FILE", "path": "/tmp/a"},
+            {"uuid": "M1", "node_type": "MEMORY", "name": "mem"},
+        ]
+    )
+    events = pd.DataFrame(
+        [
+            {
+                "event_uuid": "E_file",
+                "dataset": "cadets",
+                "host": "H",
+                "split": "train",
+                "actor_uuid": "P1",
+                "actor_type": "PROCESS",
+                "object_uuid": "F1",
+                "object_type": "FILE",
+                "object_path": "/tmp/a",
+                "event_type": "EVENT_WRITE",
+                "timestamp_ns": 10,
+                "sequence": 1,
+                "flow_src_uuid": "P1",
+                "flow_src_type": "PROCESS",
+                "flow_dst_uuid": "F1",
+                "flow_dst_type": "FILE",
+                "object_role": "predicateObject",
+                "source_file": "train.json",
+            },
+            {
+                "event_uuid": "E_memory",
+                "dataset": "cadets",
+                "host": "H",
+                "split": "train",
+                "actor_uuid": "P1",
+                "actor_type": "PROCESS",
+                "object_uuid": "M1",
+                "object_type": "MEMORY",
+                "event_type": "EVENT_WRITE",
+                "timestamp_ns": 11,
+                "sequence": 2,
+                "flow_src_uuid": "P1",
+                "flow_src_type": "PROCESS",
+                "flow_dst_uuid": "M1",
+                "flow_dst_type": "MEMORY",
+                "object_role": "predicateObject",
+                "source_file": "train.json",
+            },
+        ]
+    )
+
+    sampler = ProcessSubgraphSampler(
+        "cadets",
+        events,
+        entities,
+        config=SamplerConfig(backward_hops=0, forward_hops=1, backward_context_sec=1, forward_context_sec=1),
+    )
+    sample = next(iter(sampler.iter_samples("train", max_duration_sec=600, inactivity_gap_sec=120)))
+
+    assert set(sample.nodes) == {"P1", "F1"}
+    assert {edge["event_uuid"] for edge in sample.edges} == {"E_file"}

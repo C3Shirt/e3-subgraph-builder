@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from itertools import combinations
 from pathlib import Path
+from typing import Mapping
 
 import pandas as pd
 
+from e3prep.graph.index import ensure_event_edge_ids
 from e3prep.io import parquet_columns, read_parquet
 
 
@@ -35,21 +37,51 @@ def pairwise_jaccard(df: pd.DataFrame, key: str, split_col: str = "split") -> di
     return result
 
 
-def leakage_report(store_dir: Path, subgraph_dir: Path | None = None) -> dict:
+def subgraph_dirs_mapping(subgraph_dirs: Path | Mapping[str, Path] | None) -> dict[str, Path]:
+    if subgraph_dirs is None:
+        return {}
+    if isinstance(subgraph_dirs, Path):
+        return {subgraph_dirs.name: subgraph_dirs}
+    return {str(split): Path(path) for split, path in subgraph_dirs.items()}
+
+
+def read_subgraph_parquet_frames(subgraph_dirs: Mapping[str, Path], filename: str, columns: list[str]) -> pd.DataFrame:
+    frames = []
+    for split, subgraph_dir in sorted(subgraph_dirs.items()):
+        path = subgraph_dir / filename
+        if not path.exists():
+            continue
+        df = read_parquet(path, columns=columns, allow_missing_columns=True)
+        if "split" in columns:
+            df["split"] = df["split"].fillna(split)
+        frames.append(df)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def leakage_report(store_dir: Path, subgraph_dir: Path | Mapping[str, Path] | None = None) -> dict:
     events_path = store_dir / "events.parquet"
     events = pd.DataFrame()
     if events_path.exists():
-        columns = ["event_uuid", "object_role", "actor_uuid", "object_uuid", "split"]
-        if "event_edge_id" in parquet_columns(events_path):
-            columns.insert(0, "event_edge_id")
-        events = read_parquet(events_path, columns=columns)
+        columns = [
+            "event_edge_id",
+            "dataset",
+            "event_uuid",
+            "object_role",
+            "actor_uuid",
+            "object_uuid",
+            "event_type",
+            "timestamp_ns",
+            "sequence",
+            "split",
+        ]
+        available = set(parquet_columns(events_path))
+        events = read_parquet(events_path, columns=columns, allow_missing_columns=True)
+        if "event_edge_id" not in available or events["event_edge_id"].isna().any():
+            events = ensure_event_edge_ids(events)
     report = {"shared_event_ids": pairwise_overlap(events, "event_uuid")}
 
     if not events.empty:
-        if "event_edge_id" in events.columns:
-            report["shared_event_edge_ids"] = pairwise_overlap(events, "event_edge_id")
-        else:
-            report["shared_event_edge_ids"] = None
+        report["shared_event_edge_ids"] = pairwise_overlap(events, "event_edge_id")
         edge_keys = events.assign(
             edge_key=(
                 events["event_uuid"].astype(str)
@@ -63,14 +95,28 @@ def leakage_report(store_dir: Path, subgraph_dir: Path | None = None) -> dict:
         )
         report["shared_event_edge_keys"] = pairwise_overlap(edge_keys, "edge_key")
 
-    metadata_path = subgraph_dir / "metadata.parquet" if subgraph_dir else None
-    if metadata_path and metadata_path.exists():
-        metadata = read_parquet(metadata_path, columns=["sample_id", "center_uuid", "split"])
+    subgraph_dirs = subgraph_dirs_mapping(subgraph_dir)
+    if subgraph_dirs:
+        report["subgraph_dirs"] = {split: str(path) for split, path in sorted(subgraph_dirs.items())}
+
+    metadata = read_subgraph_parquet_frames(subgraph_dirs, "metadata.parquet", ["sample_id", "center_uuid", "split"])
+    if not metadata.empty:
         report["shared_sample_ids"] = pairwise_overlap(metadata, "sample_id")
         report["shared_center_uuids"] = pairwise_overlap(metadata, "center_uuid")
-    nodes_path = subgraph_dir / "nodes.parquet" if subgraph_dir else None
-    if nodes_path and nodes_path.exists():
-        nodes = read_parquet(nodes_path, columns=["uuid", "split"])
+
+    nodes = read_subgraph_parquet_frames(subgraph_dirs, "nodes.parquet", ["uuid", "split"])
+    if not nodes.empty:
         report["shared_node_uuids"] = pairwise_overlap(nodes, "uuid")
         report["shared_node_uuid_jaccard"] = pairwise_jaccard(nodes, "uuid")
+
+    subgraph_edges = read_subgraph_parquet_frames(subgraph_dirs, "edges.parquet", ["event_edge_id", "event_uuid", "split"])
+    if not subgraph_edges.empty:
+        report["shared_subgraph_event_edge_ids"] = pairwise_overlap(subgraph_edges, "event_edge_id")
+        report["shared_subgraph_event_ids"] = pairwise_overlap(subgraph_edges, "event_uuid")
     return report
+
+
+def overlap_total(overlap: dict | None) -> int | None:
+    if overlap is None:
+        return None
+    return int(sum(int(value) for value in overlap.values()))
