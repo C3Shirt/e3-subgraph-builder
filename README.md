@@ -12,91 +12,91 @@ The first supported path is E3-CADETS:
 
 Reference code downloaded for inspection:
 
-- `F:\phd\project\apt-project\relative\_code\MAGIC\utils\trace_parser.py`
-- `F:\phd\project\apt-project\relative\_code\ProHunter\preprocess\dataset_preprocess.py`
-- `F:\phd\project\apt-project\relative\_code\PPG\main.cpp`
-- `F:\phd\project\apt-project\relative\_code\OCR-APT\src\encode_to_PyG.py`
-- `F:\phd\project\apt-project\relative\_code\OCR-APT\src\detect_anomalous_subgraphs.py`
+- `<reference-code-dir>/MAGIC/utils/trace_parser.py`
+- `<reference-code-dir>/ProHunter/preprocess/dataset_preprocess.py`
+- `<reference-code-dir>/PPG/main.cpp`
+- `<reference-code-dir>/OCR-APT/src/encode_to_PyG.py`
+- `<reference-code-dir>/OCR-APT/src/detect_anomalous_subgraphs.py`
 
 Example commands:
 
 ```powershell
-cd F:\phd\project\apt-project\code\e3_subgraph_builder
+cd <repo-root>
 
 conda run -n intel_sports python .\scripts\parse.py `
   --dataset cadets `
-  --raw-dir F:\path\to\e3\cadets `
-  --out-dir F:\path\to\processed\cadets `
+  --raw-dir <raw-e3-dir> `
+  --out-dir <processed-dir>\cadets `
   --split-mode magic
 
 conda run -n intel_sports python .\scripts\build_labels.py `
   --dataset cadets `
-  --groundtruth F:\path\to\cadets.txt `
-  --out-dir F:\path\to\processed\cadets `
+  --groundtruth <groundtruth-file> `
+  --out-dir <processed-dir>\cadets `
   --label-source threatrace
 
 conda run -n intel_sports python .\scripts\build_subgraphs.py `
   --dataset cadets `
-  --store-dir F:\path\to\processed\cadets `
-  --out-dir F:\path\to\processed\cadets\subgraphs `
-  --index-cache-dir F:\path\to\processed\cadets\index_cache `
+  --store-dir <processed-dir>\cadets `
+  --out-dir <processed-dir>\cadets\subgraphs `
+  --index-cache-dir <processed-dir>\cadets\index_cache `
   --write-sidecar
 
 conda run -n intel_sports python .\scripts\validate.py `
-  --store-dir F:\path\to\processed\cadets `
-  --subgraph-dir F:\path\to\processed\cadets\subgraphs\test
+  --store-dir <processed-dir>\cadets `
+  --subgraph-dir <processed-dir>\cadets\subgraphs\test
 
 conda run -n intel_sports python .\scripts\visualize_subgraphs.py `
-  --subgraph-dir F:\path\to\processed\cadets\subgraphs\test `
+  --subgraph-dir <processed-dir>\cadets\subgraphs\test `
   --positive 20 `
   --negative 20
 ```
 
-Local CADETS validation commands:
+CADETS validation commands used for the current local run:
 
 ```powershell
-cd F:\phd\project\apt-project\code\e3_subgraph_builder
+cd <repo-root>
 
 conda run -n intel_sports python .\scripts\parse.py `
   --dataset cadets `
-  --raw-dir F:\phd\data\APT\DARPA `
-  --out-dir F:\phd\project\apt-project\code\e3_subgraph_builder\runs\cadets_magic_full `
+  --raw-dir <raw-e3-dir> `
+  --out-dir <repo-root>\runs\cadets_magic_full `
   --split-mode magic `
   --strict-split-files
 
 conda run -n intel_sports python .\scripts\build_labels.py `
   --dataset cadets `
-  --groundtruth F:\phd\project\apt-project\relative\_code\OCR-APT\groundtruth\cadets_ground_truth.txt `
-  --out-dir F:\phd\project\apt-project\code\e3_subgraph_builder\runs\cadets_magic_full `
+  --groundtruth <reference-code-dir>\OCR-APT\groundtruth\cadets_ground_truth.txt `
+  --out-dir <repo-root>\runs\cadets_magic_full `
   --label-source ocr_apt_groundtruth
 
 conda run -n intel_sports python .\scripts\build_subgraphs.py `
   --dataset cadets `
-  --store-dir F:\phd\project\apt-project\code\e3_subgraph_builder\runs\cadets_magic_full `
-  --out-dir F:\phd\project\apt-project\code\e3_subgraph_builder\runs\cadets_magic_full\subgraphs `
+  --store-dir <repo-root>\runs\cadets_magic_full `
+  --out-dir <repo-root>\runs\cadets_magic_full\subgraphs `
   --max-samples 1000 `
   --samples-per-shard 200 `
   --max-edges-per-pair 32 `
   --max-edges-per-expansion-node 128 `
-  --index-cache-dir F:\phd\project\apt-project\code\e3_subgraph_builder\runs\cadets_magic_full\index_cache `
+  --index-cache-dir <repo-root>\runs\cadets_magic_full\index_cache `
   --write-sidecar
 
 conda run -n intel_sports python .\scripts\validate.py `
-  --store-dir F:\phd\project\apt-project\code\e3_subgraph_builder\runs\cadets_magic_full `
-  --subgraph-dir F:\phd\project\apt-project\code\e3_subgraph_builder\runs\cadets_magic_full\subgraphs\train `
-  --out F:\phd\project\apt-project\code\e3_subgraph_builder\runs\cadets_magic_full\dataset_report_train_sample.json
+  --store-dir <repo-root>\runs\cadets_magic_full `
+  --subgraph-dir <repo-root>\runs\cadets_magic_full\subgraphs\train `
+  --out <repo-root>\runs\cadets_magic_full\dataset_report_train_sample.json
 
 conda run -n intel_sports python .\scripts\visualize_subgraphs.py `
-  --subgraph-dir F:\phd\project\apt-project\code\e3_subgraph_builder\runs\cadets_magic_full\subgraphs\train `
+  --subgraph-dir <repo-root>\runs\cadets_magic_full\subgraphs\train `
   --positive 20 `
   --negative 20
 
 conda run -n intel_sports python .\scripts\train_unsupervised_baseline.py `
   --model hgt `
   --method both `
-  --train-dir F:\phd\project\apt-project\code\e3_subgraph_builder\runs\cadets_magic_full\ocr_apt_ioc_balanced_v01\train `
-  --test-dir F:\phd\project\apt-project\code\e3_subgraph_builder\runs\cadets_magic_full\ocr_apt_ioc_balanced_v01\test `
-  --out-dir F:\phd\project\apt-project\code\e3_subgraph_builder\runs\cadets_magic_full\ocr_apt_ioc_balanced_v01\unsup_hgt `
+  --train-dir <repo-root>\runs\cadets_magic_full\ocr_apt_ioc_balanced_v01\train `
+  --test-dir <repo-root>\runs\cadets_magic_full\ocr_apt_ioc_balanced_v01\test `
+  --out-dir <repo-root>\runs\cadets_magic_full\ocr_apt_ioc_balanced_v01\unsup_hgt `
   --train-labels 0 `
   --require-train-positive-node-count zero `
   --contamination 0.01 `
@@ -117,5 +117,5 @@ Important design choices:
 - Rebuild subgraphs with `--write-sidecar` before visualization or manual audit. The `.pt` shards intentionally avoid storing UUID/path strings; sample-level strings live in `nodes.parquet` and `edges.parquet`.
 - For full CADETS samples, prefer starting with `--max-edges-per-pair 32 --max-edges-per-expansion-node 128`. The sampler also prioritizes edges touching labeled nodes before applying these caps, so IOC-derived positives are not silently removed by budget pruning.
 - Use `--index-cache-dir` for repeated full-split sampling. Cache files are keyed by the source `events.parquet` path, size, mtime, split, and row count; pass `--rebuild-index-cache` after changing event contents or index semantics.
-- Current exploratory OCR-APT IOC run is recorded at `F:\phd\project\apt-project\code\e3_subgraph_builder\runs\cadets_magic_full\ocr_apt_ioc_v01\RUN_NOTES.md`.
-- Current fixed balanced OCR-APT IOC baseline is recorded at `F:\phd\project\apt-project\code\e3_subgraph_builder\runs\cadets_magic_full\ocr_apt_ioc_balanced_v01\RUN_NOTES.md`.
+- Current exploratory OCR-APT IOC run is recorded at `<repo-root>\runs\cadets_magic_full\ocr_apt_ioc_v01\RUN_NOTES.md`.
+- Current fixed balanced OCR-APT IOC baseline is recorded at `<repo-root>\runs\cadets_magic_full\ocr_apt_ioc_balanced_v01\RUN_NOTES.md`.
