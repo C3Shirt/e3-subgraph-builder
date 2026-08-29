@@ -157,7 +157,12 @@ def read_subgraph_parquet_frames(subgraph_dirs: Mapping[str, Path], filename: st
 def leakage_report(store_dir: Path, subgraph_dir: Path | Mapping[str, Path] | None = None) -> dict:
     events_path = store_dir / "events.parquet"
     events = pd.DataFrame()
-    report: dict = {}
+    report: dict = {
+        "event_identity_policy": {
+            "formal_gate": "event_edge_id",
+            "source_event_uuid": "diagnostic_only; CDM event_uuid is not assumed globally unique",
+        }
+    }
     if events_path.exists():
         use_columnar_events = parquet_num_rows(events_path) > COLUMNAR_OVERLAP_ROW_THRESHOLD
         if use_columnar_events:
@@ -241,6 +246,9 @@ def leakage_report(store_dir: Path, subgraph_dir: Path | Mapping[str, Path] | No
             if not subgraph_edges.empty:
                 report["shared_subgraph_event_edge_ids"] = pairwise_overlap(subgraph_edges, "event_edge_id")
                 report["shared_subgraph_event_ids"] = pairwise_overlap(subgraph_edges, "event_uuid")
+                report["shared_subgraph_event_ids_note"] = (
+                    "diagnostic_only; use shared_subgraph_event_edge_ids for formal leakage gating"
+                )
     return report
 
 

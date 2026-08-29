@@ -1,6 +1,6 @@
 [project]
 name = "e3-subgraph-builder"
-version = "0.2.0"
+version = "0.3.0"
 description = "DARPA TC E3 canonical event store and process-centered subgraph builder."
 requires-python = ">=3.9"
 dependencies = [

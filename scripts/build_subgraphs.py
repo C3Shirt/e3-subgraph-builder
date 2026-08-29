@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -11,6 +12,7 @@ import pandas as pd
 
 from e3prep.export.shards import write_pyg_shards
 from e3prep.graph.index import build_or_load_temporal_index, ensure_event_edge_ids
+from e3prep.graph.sqlite_index import build_sqlite_temporal_index
 from e3prep.io import read_parquet, write_json
 from e3prep.sampling.process_sampler import MVP_NODE_TYPES, ProcessSubgraphSampler, SamplerConfig
 
@@ -94,8 +96,21 @@ def parse_args() -> argparse.Namespace:
         "--index-cache-dir",
         type=Path,
         default=None,
-        help="Optional directory for pickled split TemporalGraphIndex caches.",
+        help="Optional directory for split index caches.",
     )
+    parser.add_argument(
+        "--index-backend",
+        choices=["memory", "sqlite"],
+        default="memory",
+        help="Use memory for small/smoke splits; use sqlite for full CADETS train-scale splits.",
+    )
+    parser.add_argument(
+        "--sqlite-index-dir",
+        type=Path,
+        default=None,
+        help="Directory for SQLite temporal indexes. Defaults to --index-cache-dir or <store-dir>/sqlite_index.",
+    )
+    parser.add_argument("--sqlite-batch-size", type=int, default=250_000)
     parser.add_argument("--rebuild-index-cache", action="store_true", help="Ignore and overwrite existing index caches.")
     return parser.parse_args()
 
@@ -184,6 +199,15 @@ def index_cache_key(events_path: Path, split: str, rows: int) -> dict:
     }
 
 
+def sqlite_index_path(args: argparse.Namespace, split: str) -> Path:
+    index_dir = args.sqlite_index_dir or args.index_cache_dir or (args.store_dir / "sqlite_index")
+    return index_dir / f"{args.dataset}_{split}_temporal_index.sqlite"
+
+
+def load_existing_summary(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+
 def main() -> None:
     args = parse_args()
     if (args.labeled_centers_only or args.centers_touching_labels) and not args.allow_diagnostic_label_selection:
@@ -212,13 +236,20 @@ def main() -> None:
         allowed_node_types=tuple(node_type.upper() for node_type in (args.node_type or MVP_NODE_TYPES)),
     )
 
-    summary = {}
+    summary_path = args.out_dir / "subgraph_build_summary.json"
+    summary = load_existing_summary(summary_path)
     for split in split_names:
         print(f"[build-subgraphs] reading split={split}", flush=True)
-        split_events = read_split_events(events_path, split)
-        print(f"[build-subgraphs] split={split} events={len(split_events)}", flush=True)
+        split_events = pd.DataFrame()
+        if args.index_backend == "memory" or args.centers_touching_labels:
+            split_events = read_split_events(events_path, split)
+            print(f"[build-subgraphs] split={split} events={len(split_events)}", flush=True)
+        elif args.index_backend == "sqlite":
+            print(f"[build-subgraphs] split={split} events will be streamed into sqlite index", flush=True)
         split_candidate_centers = set(candidate_centers)
         if args.centers_touching_labels:
+            if args.index_backend != "memory":
+                raise ValueError("--centers-touching-labels requires --index-backend memory and is diagnostic-only")
             split_candidate_centers.update(centers_touching_positive_labels(split_events, labels))
         split_candidate_centers = apply_center_limit(split_candidate_centers, args.center_limit)
         center_uuids = split_candidate_centers if split_candidate_centers else None
@@ -227,16 +258,29 @@ def main() -> None:
             f"{'all' if center_uuids is None else len(center_uuids)}",
             flush=True,
         )
-        print(f"[build-subgraphs] split={split} building temporal index", flush=True)
-        cache_path = None
-        if args.index_cache_dir:
-            cache_path = args.index_cache_dir / f"{args.dataset}_{split}_temporal_index.pkl"
-        index, index_source = build_or_load_temporal_index(
-            split_events,
-            cache_path=cache_path,
-            cache_key=index_cache_key(events_path, split, len(split_events)),
-            rebuild=args.rebuild_index_cache,
-        )
+        print(f"[build-subgraphs] split={split} building temporal index backend={args.index_backend}", flush=True)
+        cache_path: Path | None = None
+        split_event_count: int
+        if args.index_backend == "sqlite":
+            cache_path = sqlite_index_path(args, split)
+            index, index_source, split_event_count = build_sqlite_temporal_index(
+                events_path,
+                split,
+                cache_path,
+                rebuild=args.rebuild_index_cache,
+                batch_size=args.sqlite_batch_size,
+            )
+            print(f"[build-subgraphs] split={split} events={split_event_count}", flush=True)
+        else:
+            split_event_count = len(split_events)
+            if args.index_cache_dir:
+                cache_path = args.index_cache_dir / f"{args.dataset}_{split}_temporal_index.pkl"
+            index, index_source = build_or_load_temporal_index(
+                split_events,
+                cache_path=cache_path,
+                cache_key=index_cache_key(events_path, split, len(split_events)),
+                rebuild=args.rebuild_index_cache,
+            )
         print(f"[build-subgraphs] split={split} temporal index {index_source}", flush=True)
         sampler = ProcessSubgraphSampler(
             args.dataset,
@@ -254,16 +298,23 @@ def main() -> None:
             inactivity_gap_sec=args.episode_inactivity_gap_sec,
             max_samples=args.max_samples,
         )
-        summary[split] = write_pyg_shards(
-            samples,
-            entities,
-            args.out_dir / split,
-            args.samples_per_shard,
-            labels=labels,
-            write_sidecar=args.write_sidecar,
-        )
+        try:
+            summary[split] = write_pyg_shards(
+                samples,
+                entities,
+                args.out_dir / split,
+                args.samples_per_shard,
+                labels=labels,
+                write_sidecar=args.write_sidecar,
+            )
+        finally:
+            close_index = getattr(index, "close", None)
+            if callable(close_index):
+                close_index()
         summary[split]["candidate_centers"] = None if center_uuids is None else len(center_uuids)
+        summary[split]["events"] = split_event_count
         summary[split]["label_strategy"] = args.label_strategy
+        summary[split]["index_backend"] = args.index_backend
         summary[split]["node_type_policy"] = {
             "sampled_node_types": list(cfg.allowed_node_types),
             "canonical_tables_keep_all_types": True,
@@ -276,7 +327,7 @@ def main() -> None:
         }
         summary[split]["index_cache"] = None if cache_path is None else str(cache_path)
         summary[split]["index_source"] = index_source
-    write_json(summary, args.out_dir / "subgraph_build_summary.json")
+    write_json(summary, summary_path)
     print(summary)
 
 

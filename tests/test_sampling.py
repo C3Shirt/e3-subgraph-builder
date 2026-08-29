@@ -5,8 +5,11 @@ from pathlib import Path
 import pandas as pd
 
 from e3prep.graph.index import build_or_load_temporal_index, ensure_event_edge_ids
+from e3prep.graph.sqlite_index import build_sqlite_temporal_index
+from e3prep.io import write_parquet_records
 from e3prep.sampling.budget import apply_budget
 from e3prep.sampling.process_sampler import ProcessSubgraphSampler, SamplerConfig
+from scripts.build_subgraphs import load_existing_summary
 
 
 def test_process_sampler_uses_only_current_split_events() -> None:
@@ -206,6 +209,81 @@ def test_temporal_index_cache_roundtrip(tmp_path: Path) -> None:
     assert built_source == "built"
     assert loaded_source == "loaded"
     assert loaded_index.events[0].event_edge_id == built_index.events[0].event_edge_id
+
+
+def test_sqlite_temporal_index_roundtrip(tmp_path: Path) -> None:
+    events = ensure_event_edge_ids(
+        pd.DataFrame(
+            [
+                {
+                    "event_uuid": "E1",
+                    "dataset": "cadets",
+                    "host": "H",
+                    "split": "train",
+                    "actor_uuid": "P1",
+                    "actor_type": "PROCESS",
+                    "object_uuid": "F1",
+                    "object_type": "FILE",
+                    "object_path": "/tmp/a",
+                    "event_type": "EVENT_WRITE",
+                    "timestamp_ns": 10,
+                    "sequence": 1,
+                    "flow_src_uuid": "P1",
+                    "flow_src_type": "PROCESS",
+                    "flow_dst_uuid": "F1",
+                    "flow_dst_type": "FILE",
+                    "object_role": "predicateObject",
+                    "source_file": "train.json",
+                },
+                {
+                    "event_uuid": "E2",
+                    "dataset": "cadets",
+                    "host": "H",
+                    "split": "test",
+                    "actor_uuid": "P1",
+                    "actor_type": "PROCESS",
+                    "object_uuid": "F2",
+                    "object_type": "FILE",
+                    "object_path": "/tmp/b",
+                    "event_type": "EVENT_WRITE",
+                    "timestamp_ns": 20,
+                    "sequence": 2,
+                    "flow_src_uuid": "P1",
+                    "flow_src_type": "PROCESS",
+                    "flow_dst_uuid": "F2",
+                    "flow_dst_type": "FILE",
+                    "object_role": "predicateObject",
+                    "source_file": "test.json",
+                },
+            ]
+        )
+    )
+    events_path = tmp_path / "events.parquet"
+    write_parquet_records(events.to_dict("records"), events_path, "events")
+
+    index, source, rows = build_sqlite_temporal_index(events_path, "train", tmp_path / "index.sqlite")
+    loaded, loaded_source, loaded_rows = build_sqlite_temporal_index(events_path, "train", tmp_path / "index.sqlite")
+
+    assert source == "built"
+    assert rows == 1
+    assert loaded_source == "loaded"
+    assert loaded_rows == 1
+    assert [edge.event_uuid for edge in index.outgoing_edges("P1", 0, 15)] == ["E1"]
+    assert [edge.event_uuid for edge in loaded.incoming_edges("F1", 0, 15)] == ["E1"]
+    assert [edge.event_uuid for edge in loaded.incident_edges("P1")] == ["E1"]
+    index.close()
+    loaded.close()
+
+
+def test_load_existing_subgraph_summary_preserves_other_splits(tmp_path: Path) -> None:
+    summary_path = tmp_path / "subgraph_build_summary.json"
+    summary_path.write_text('{"train": {"samples": 10}}', encoding="utf-8")
+
+    summary = load_existing_summary(summary_path)
+    summary["val"] = {"samples": 5}
+
+    assert summary["train"]["samples"] == 10
+    assert summary["val"]["samples"] == 5
 
 
 def test_budget_is_not_label_aware() -> None:

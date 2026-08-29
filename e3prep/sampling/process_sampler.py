@@ -7,7 +7,7 @@ import pandas as pd
 
 from e3prep.graph.index import TemporalGraphIndex
 from e3prep.sampling.budget import apply_budget
-from e3prep.sampling.episodes import NANOSECONDS, build_process_episodes, process_uuids_from_entities
+from e3prep.sampling.episodes import NANOSECONDS, iter_process_episodes, process_uuids_from_entities
 from e3prep.schema.samples import ProcessEpisode, SubgraphSample
 
 
@@ -82,9 +82,9 @@ class ProcessSubgraphSampler:
         self.labels = LabelStore(labels)
         self.center_uuids = set(str(uuid) for uuid in center_uuids) if center_uuids is not None else None
 
-    def build_episodes(self, split: str, max_duration_sec: int, inactivity_gap_sec: int) -> list[ProcessEpisode]:
+    def build_episodes(self, split: str, max_duration_sec: int, inactivity_gap_sec: int):
         process_uuids = self.center_uuids if self.center_uuids is not None else process_uuids_from_entities(self.entities)
-        return build_process_episodes(
+        return iter_process_episodes(
             self.index,
             process_uuids=process_uuids,
             split=split,

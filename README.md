@@ -1,4 +1,4 @@
-# E3-Subgraph Builder v0.2
+# E3-Subgraph Builder v0.3
 
 This module builds a canonical DARPA TC E3 event store and process-centered temporal subgraph dataset.
 
@@ -80,6 +80,7 @@ conda run -n intel_sports python .\scripts\build_subgraphs.py `
   --dataset cadets `
   --store-dir <repo-root>\runs\cadets_chrono_full `
   --out-dir <repo-root>\runs\cadets_chrono_full\subgraphs `
+  --index-backend sqlite `
   --samples-per-shard 200 `
   --max-edges-per-pair 32 `
   --max-edges-per-expansion-node 128 `
@@ -130,6 +131,7 @@ Important design choices:
 - `chronological_disjoint` is the formal split mode. It creates train, validation, and test event intervals before sampling, so subgraphs are never randomly split after construction.
 - `magic_reproduction` exists only to reproduce earlier code paths. TRACE `magic_reproduction` is explicitly not eligible for formal paper results because the current MAGIC-style split reuses overlapping files.
 - Formal validation should use `scripts/validate.py --subgraph-root <subgraphs> --fail-on-event-leakage`; `shared_event_edge_ids` must be zero. For full CADETS, use `--relation-top-n 0` for the hard gate run and do relation audit separately.
+- Treat source `event_uuid` overlap as diagnostic only. CADETS CDM event UUIDs can repeat across distinct endpoints/timestamps, so formal leakage gating uses the derived `event_edge_id`.
 - The MVP sampler outputs only `PROCESS`, `FILE`, and `SOCKET` nodes. Canonical tables still retain all parsed entity types for later schema expansion.
 - Do not compute LLM embeddings in preprocessing.
 - Labels are stored outside graphs so ThreaTrace, ORTHRUS, REAPr, and DARPA-original labels can be compared later.
@@ -139,6 +141,7 @@ Important design choices:
 - `scripts/train_unsupervised_baseline.py` never passes attack labels into the loss. If `--train-labels 0` is used, report it as a clean-normal one-class protocol, not as a supervised classifier.
 - Do not use `scripts/build_balanced_dataset.py` output as a formal test set. It filters by label and `positive_node_count`, and is retained only for quick sanity experiments.
 - Rebuild subgraphs with `--write-sidecar` before visualization or manual audit. The `.pt` shards intentionally avoid storing UUID/path strings; sample-level strings live in `nodes.parquet` and `edges.parquet`.
+- For full CADETS train-scale samples, use `--index-backend sqlite`. The in-memory backend is suitable for smoke runs and smaller splits, but the chronological CADETS train split is too large for the Python-object `TemporalGraphIndex`.
 - For full CADETS samples, prefer starting with `--max-edges-per-pair 32 --max-edges-per-expansion-node 128`. Budget pruning is label-agnostic; it ranks by hop distance, center touch, temporal distance, direction, and stable edge IDs.
-- Use `--index-cache-dir` for repeated full-split sampling. Cache files are keyed by the source `events.parquet` path, size, mtime, split, and row count; pass `--rebuild-index-cache` after changing event contents or index semantics.
+- Use `--index-cache-dir` for repeated sampling. The memory backend stores pickled split indexes; the sqlite backend stores one SQLite file per split with source `events.parquet` metadata. Pass `--rebuild-index-cache` after changing event contents or index semantics.
 - Historical exploratory OCR-APT IOC notes may exist under `<repo-root>\runs\...`; treat them as diagnostic artifacts, not formal paper results.
