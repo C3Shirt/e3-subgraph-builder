@@ -47,7 +47,8 @@ conda run -n intel_sports python .\scripts\build_subgraphs.py `
 conda run -n intel_sports python .\scripts\validate.py `
   --store-dir <processed-dir>\cadets `
   --subgraph-root <processed-dir>\cadets\subgraphs `
-  --fail-on-event-leakage
+  --fail-on-event-leakage `
+  --relation-top-n 0
 
 conda run -n intel_sports python .\scripts\visualize_subgraphs.py `
   --subgraph-dir <processed-dir>\cadets\subgraphs\test `
@@ -89,6 +90,7 @@ conda run -n intel_sports python .\scripts\validate.py `
   --store-dir <repo-root>\runs\cadets_chrono_full `
   --subgraph-root <repo-root>\runs\cadets_chrono_full\subgraphs `
   --fail-on-event-leakage `
+  --relation-top-n 0 `
   --out <repo-root>\runs\cadets_chrono_full\dataset_report.json
 ```
 
@@ -127,7 +129,7 @@ Important design choices:
 - Build entity metadata from all JSON chunks before parsing split-specific events.
 - `chronological_disjoint` is the formal split mode. It creates train, validation, and test event intervals before sampling, so subgraphs are never randomly split after construction.
 - `magic_reproduction` exists only to reproduce earlier code paths. TRACE `magic_reproduction` is explicitly not eligible for formal paper results because the current MAGIC-style split reuses overlapping files.
-- Formal validation should use `scripts/validate.py --subgraph-root <subgraphs> --fail-on-event-leakage`; `shared_event_edge_ids` must be zero.
+- Formal validation should use `scripts/validate.py --subgraph-root <subgraphs> --fail-on-event-leakage`; `shared_event_edge_ids` must be zero. For full CADETS, use `--relation-top-n 0` for the hard gate run and do relation audit separately.
 - The MVP sampler outputs only `PROCESS`, `FILE`, and `SOCKET` nodes. Canonical tables still retain all parsed entity types for later schema expansion.
 - Do not compute LLM embeddings in preprocessing.
 - Labels are stored outside graphs so ThreaTrace, ORTHRUS, REAPr, and DARPA-original labels can be compared later.

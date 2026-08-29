@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
         help="Required split below --subgraph-root. Defaults to train, val, and test.",
     )
     parser.add_argument("--out", type=Path, default=None)
-    parser.add_argument("--relation-top-n", type=int, default=50)
+    parser.add_argument("--relation-top-n", type=int, default=50, help="Set to 0 to skip the relation audit.")
     parser.add_argument(
         "--fail-on-event-leakage",
         action="store_true",
@@ -113,7 +113,11 @@ def main() -> None:
     subgraph_arg = subgraph_dirs or None
     report = build_dataset_report(args.store_dir, subgraph_arg)
     report["label_coverage"] = label_coverage_report(args.store_dir, subgraph_arg)
-    report["relation_audit"] = relation_audit_report(args.store_dir, args.relation_top_n)
+    report["relation_audit"] = (
+        relation_audit_report(args.store_dir, args.relation_top_n)
+        if args.relation_top_n > 0
+        else {"skipped": True, "reason": "relation_top_n=0"}
+    )
     report["leakage"] = leakage_report(args.store_dir, subgraph_arg)
     report["validation_policy"] = {
         "subgraph_dirs": {split: str(path) for split, path in sorted(subgraph_dirs.items())},
