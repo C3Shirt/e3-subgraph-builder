@@ -1,4 +1,4 @@
-# E3-Subgraph Builder v0.3
+# E3-Subgraph Builder v0.4
 
 This module builds a canonical DARPA TC E3 event store and process-centered temporal subgraph dataset.
 
@@ -37,6 +37,10 @@ conda run -n intel_sports python .\scripts\build_labels.py `
   --out-dir <processed-dir>\cadets `
   --label-source threatrace
 
+conda run -n intel_sports python .\scripts\enrich_entities_from_events.py `
+  --store-dir <processed-dir>\cadets `
+  --replace
+
 conda run -n intel_sports python .\scripts\build_subgraphs.py `
   --dataset cadets `
   --store-dir <processed-dir>\cadets `
@@ -49,6 +53,11 @@ conda run -n intel_sports python .\scripts\validate.py `
   --subgraph-root <processed-dir>\cadets\subgraphs `
   --fail-on-event-leakage `
   --relation-top-n 0
+
+conda run -n intel_sports python .\scripts\audit_protocol.py `
+  --store-dir <processed-dir>\cadets `
+  --subgraph-root <processed-dir>\cadets\subgraphs `
+  --out <processed-dir>\cadets\protocol_audit.json
 
 conda run -n intel_sports python .\scripts\visualize_subgraphs.py `
   --subgraph-dir <processed-dir>\cadets\subgraphs\test `
@@ -136,11 +145,14 @@ Important design choices:
 - Do not compute LLM embeddings in preprocessing.
 - Labels are stored outside graphs so ThreaTrace, ORTHRUS, REAPr, and DARPA-original labels can be compared later.
 - For OCR-APT's `cadets_ground_truth.txt`, use `--label-source ocr_apt_groundtruth`; do not report it as ThreaTrace unless the labels are actually from ThreaTrace.
+- Run `scripts/audit_protocol.py` before training. If train/val/test do not all contain positive center labels, Protocol A supervised benign/malicious classification is not ready.
+- With the current OCR-APT IOC-derived CADETS labels, many positives are FILE indicators and some are common dependencies such as dynamic-loader or libc paths. Do not treat `subgraph_any_positive` as paper-grade benign/malicious ground truth without a separate label audit.
 - Label-aware center selection flags such as `--labeled-centers-only` and `--centers-touching-labels` are diagnostic-only and require `--allow-diagnostic-label-selection`.
 - Do not use supervised benign/malicious cross-entropy as the formal baseline. The formal baseline path is unsupervised anomaly detection: edge-type prediction NLL and one-class deviation over graph embeddings. `scripts/train_baseline.py` is retained only as a code-path sanity check.
 - `scripts/train_unsupervised_baseline.py` never passes attack labels into the loss. If `--train-labels 0` is used, report it as a clean-normal one-class protocol, not as a supervised classifier.
 - Do not use `scripts/build_balanced_dataset.py` output as a formal test set. It filters by label and `positive_node_count`, and is retained only for quick sanity experiments.
 - Rebuild subgraphs with `--write-sidecar` before visualization or manual audit. The `.pt` shards intentionally avoid storing UUID/path strings; sample-level strings live in `nodes.parquet` and `edges.parquet`.
+- `scripts/enrich_entities_from_events.py` backfills FILE paths from `events.parquet` without using labels. PROCESS command-line semantics still require raw-event property extraction; do not infer process executables from `EVENT_EXECUTE` object paths by default because CADETS commonly records dynamic-loader objects there.
 - For full CADETS train-scale samples, use `--index-backend sqlite`. The in-memory backend is suitable for smoke runs and smaller splits, but the chronological CADETS train split is too large for the Python-object `TemporalGraphIndex`.
 - For full CADETS samples, prefer starting with `--max-edges-per-pair 32 --max-edges-per-expansion-node 128`. Budget pruning is label-agnostic; it ranks by hop distance, center touch, temporal distance, direction, and stable edge IDs.
 - Use `--index-cache-dir` for repeated sampling. The memory backend stores pickled split indexes; the sqlite backend stores one SQLite file per split with source `events.parquet` metadata. Pass `--rebuild-index-cache` after changing event contents or index semantics.
