@@ -7,7 +7,7 @@ import pandas as pd
 import torch
 
 from e3prep.export.pyg import sample_to_heterodata
-from e3prep.io import write_parquet_records
+from e3prep.io import ParquetRecordWriter
 from e3prep.schema.samples import SubgraphSample
 
 
@@ -89,11 +89,11 @@ def write_pyg_shards(
     positive_uuids = positive_label_set(labels)
 
     shard: list = []
-    metadata_rows: list[dict] = []
-    node_rows: list[dict] = []
-    edge_rows: list[dict] = []
     shard_index = 0
     total_samples = 0
+    metadata_writer = ParquetRecordWriter(out_dir / "metadata.parquet", "sample_metadata")
+    node_writer = ParquetRecordWriter(out_dir / "nodes.parquet", "sample_nodes") if write_sidecar else None
+    edge_writer = ParquetRecordWriter(out_dir / "edges.parquet", "sample_edges") if write_sidecar else None
 
     def flush() -> None:
         nonlocal shard, shard_index
@@ -104,17 +104,24 @@ def write_pyg_shards(
         shard = []
         shard_index += 1
 
-    for sample in samples:
-        shard.append(sample_to_heterodata(sample, entity_by_uuid))
-        metadata_rows.append(sample.metadata())
-        if write_sidecar:
-            node_rows.extend(sample_node_rows(sample, entity_by_uuid, positive_uuids))
-            edge_rows.extend(sample_edge_rows(sample))
-        total_samples += 1
-        if len(shard) >= samples_per_shard:
-            flush()
-    flush()
-    write_parquet_records(metadata_rows, out_dir / "metadata.parquet", "sample_metadata")
+    try:
+        for sample in samples:
+            shard.append(sample_to_heterodata(sample, entity_by_uuid))
+            metadata_writer.write(sample.metadata())
+            if node_writer is not None and edge_writer is not None:
+                node_writer.write_many(sample_node_rows(sample, entity_by_uuid, positive_uuids))
+                edge_writer.write_many(sample_edge_rows(sample))
+            total_samples += 1
+            if len(shard) >= samples_per_shard:
+                flush()
+        flush()
+    finally:
+        metadata_writer.close()
+        if node_writer is not None:
+            node_writer.close()
+        if edge_writer is not None:
+            edge_writer.close()
+
     result = {
         "samples": total_samples,
         "shards": shard_index,
@@ -122,8 +129,6 @@ def write_pyg_shards(
         "graph_dir": str(graph_dir),
     }
     if write_sidecar:
-        write_parquet_records(node_rows, out_dir / "nodes.parquet", "sample_nodes")
-        write_parquet_records(edge_rows, out_dir / "edges.parquet", "sample_edges")
         result["nodes"] = str(out_dir / "nodes.parquet")
         result["edges"] = str(out_dir / "edges.parquet")
     return result

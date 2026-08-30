@@ -123,6 +123,53 @@ PARQUET_SCHEMAS = {
 }
 
 
+class ParquetRecordWriter:
+    def __init__(self, path: Path, schema_name: str, chunk_size: int = 100_000):
+        self.path = path
+        self.schema = PARQUET_SCHEMAS[schema_name]
+        self.chunk_size = chunk_size
+        self.writer: pq.ParquetWriter | None = None
+        self.count = 0
+        self.buffer: list[dict] = []
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+    def write(self, row: dict) -> None:
+        self.buffer.append({name: clean_parquet_value(row.get(name)) for name in self.schema.names})
+        if len(self.buffer) >= self.chunk_size:
+            self.flush()
+
+    def write_many(self, rows: Iterable[dict]) -> None:
+        for row in rows:
+            self.write(row)
+
+    def flush(self) -> None:
+        if not self.buffer:
+            return
+        table = pa.Table.from_pylist(self.buffer, schema=self.schema)
+        if self.writer is None:
+            self.writer = pq.ParquetWriter(self.path, self.schema)
+        self.writer.write_table(table)
+        self.count += len(self.buffer)
+        self.buffer = []
+
+    def close(self) -> int:
+        try:
+            self.flush()
+            if self.writer is None:
+                pq.write_table(pa.Table.from_pylist([], schema=self.schema), self.path)
+        finally:
+            if self.writer is not None:
+                self.writer.close()
+                self.writer = None
+        return self.count
+
+    def __enter__(self) -> "ParquetRecordWriter":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
+
+
 def iter_jsonl_records(
     paths: Sequence[Path],
     include_patterns: Sequence[str] | None = None,
@@ -147,34 +194,11 @@ def write_parquet_records(
     schema_name: str,
     chunk_size: int = 100_000,
 ) -> int:
-    schema = PARQUET_SCHEMAS[schema_name]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    writer: pq.ParquetWriter | None = None
-    count = 0
-    buffer: list[dict] = []
-
-    def flush() -> None:
-        nonlocal writer, count, buffer
-        if not buffer:
-            return
-        table = pa.Table.from_pylist(buffer, schema=schema)
-        if writer is None:
-            writer = pq.ParquetWriter(path, schema)
-        writer.write_table(table)
-        count += len(buffer)
-        buffer = []
-
+    writer = ParquetRecordWriter(path, schema_name, chunk_size)
     try:
-        for row in rows:
-            buffer.append({name: clean_parquet_value(row.get(name)) for name in schema.names})
-            if len(buffer) >= chunk_size:
-                flush()
-        flush()
-        if writer is None:
-            pq.write_table(pa.Table.from_pylist([], schema=schema), path)
+        writer.write_many(rows)
     finally:
-        if writer is not None:
-            writer.close()
+        count = writer.close()
     return count
 
 
