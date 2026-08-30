@@ -218,10 +218,25 @@ def leakage_report(store_dir: Path, subgraph_dir: Path | Mapping[str, Path] | No
         report["shared_sample_ids"] = pairwise_overlap(metadata, "sample_id")
         report["shared_center_uuids"] = pairwise_overlap(metadata, "center_uuid")
 
-    nodes = read_subgraph_parquet_frames(subgraph_dirs, "nodes.parquet", ["uuid", "split"])
-    if not nodes.empty:
-        report["shared_node_uuids"] = pairwise_overlap(nodes, "uuid")
-        report["shared_node_uuid_jaccard"] = pairwise_jaccard(nodes, "uuid")
+    subgraph_node_sources = {
+        split: path / "nodes.parquet"
+        for split, path in subgraph_dirs.items()
+        if (path / "nodes.parquet").exists()
+    }
+    if subgraph_node_sources:
+        total_subgraph_nodes = sum(parquet_num_rows(path) for path in subgraph_node_sources.values())
+        if total_subgraph_nodes > COLUMNAR_OVERLAP_ROW_THRESHOLD:
+            report["shared_node_uuids"] = pairwise_overlap_parquet_sources(
+                subgraph_node_sources,
+                "uuid",
+                tmp_parent=store_dir,
+            )
+            report["shared_node_uuid_jaccard"] = {"skipped": "large_subgraph_sidecars"}
+        else:
+            nodes = read_subgraph_parquet_frames(subgraph_dirs, "nodes.parquet", ["uuid", "split"])
+            if not nodes.empty:
+                report["shared_node_uuids"] = pairwise_overlap(nodes, "uuid")
+                report["shared_node_uuid_jaccard"] = pairwise_jaccard(nodes, "uuid")
 
     subgraph_edge_sources = {
         split: path / "edges.parquet"

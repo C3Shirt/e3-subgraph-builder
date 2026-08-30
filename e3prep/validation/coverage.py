@@ -84,6 +84,47 @@ def _event_label_hits(events_path: Path, positive_labels: set[str], batch_size: 
     }
 
 
+def _subgraph_node_label_hits(
+    subgraph_dirs: Mapping[str, Path],
+    positive_labels: set[str],
+    batch_size: int = 250_000,
+) -> tuple[set[str], dict[str, set[str]], bool]:
+    if not subgraph_dirs or not positive_labels:
+        return set(), {}, False
+
+    all_hits: set[str] = set()
+    hits_by_split: dict[str, set[str]] = {}
+    nodes_found = False
+    for default_split, subgraph_dir in sorted(subgraph_dirs.items()):
+        nodes_path = subgraph_dir / "nodes.parquet"
+        if not nodes_path.exists() or "uuid" not in parquet_columns(nodes_path):
+            continue
+        nodes_found = True
+        available = set(parquet_columns(nodes_path))
+        columns = ["uuid"]
+        if "split" in available:
+            columns.insert(0, "split")
+        parquet_file = pq.ParquetFile(nodes_path)
+        for batch in parquet_file.iter_batches(batch_size=batch_size, columns=columns):
+            nodes = batch.to_pandas()
+            if nodes.empty:
+                continue
+            uuid_keys = _uuid_key_series(nodes["uuid"])
+            hits = set(uuid_keys.tolist()) & positive_labels
+            if not hits:
+                continue
+            all_hits.update(hits)
+            if "split" not in nodes.columns:
+                hits_by_split.setdefault(str(default_split), set()).update(hits)
+                continue
+            split_values = nodes["split"].fillna(default_split).astype(str)
+            for split, group in nodes.groupby(split_values):
+                split_hits = set(_uuid_key_series(group["uuid"]).tolist()) & positive_labels
+                if split_hits:
+                    hits_by_split.setdefault(str(split), set()).update(split_hits)
+    return all_hits, hits_by_split, nodes_found
+
+
 def label_coverage_report(store_dir: Path, subgraph_dir: Path | Mapping[str, Path] | None = None) -> dict:
     labels_path = store_dir / "labels.parquet"
     entities_path = store_dir / "entities.parquet"
@@ -93,7 +134,6 @@ def label_coverage_report(store_dir: Path, subgraph_dir: Path | Mapping[str, Pat
     entities = read_parquet(entities_path, columns=["uuid", "node_type"]) if entities_path.exists() else pd.DataFrame()
     subgraph_dirs = subgraph_dirs_mapping(subgraph_dir)
     metadata = read_subgraph_parquet_frames(subgraph_dirs, "metadata.parquet", ["center_uuid", "label", "split"])
-    nodes = read_subgraph_parquet_frames(subgraph_dirs, "nodes.parquet", ["uuid", "split"])
 
     positive_labels = set()
     if not labels.empty:
@@ -106,12 +146,15 @@ def label_coverage_report(store_dir: Path, subgraph_dir: Path | Mapping[str, Pat
     event_object_uuids = event_hits["object_hits"]
     event_endpoint_uuids = event_hits["endpoint_hits"]
     center_uuids = _uuid_set(metadata, "center_uuid")
-    subgraph_node_uuids = _uuid_set(nodes, "uuid")
+    subgraph_node_uuids, subgraph_node_uuids_by_split, nodes_found = _subgraph_node_label_hits(
+        subgraph_dirs,
+        positive_labels,
+    )
 
     in_entities = positive_labels & entity_uuids
     in_events = positive_labels & event_endpoint_uuids
     in_centers = positive_labels & center_uuids
-    in_subgraph_nodes = positive_labels & subgraph_node_uuids if subgraph_node_uuids else set()
+    in_subgraph_nodes = positive_labels & subgraph_node_uuids if nodes_found else set()
 
     report = {
         "labels_path": str(labels_path) if labels_path.exists() else None,
@@ -124,7 +167,7 @@ def label_coverage_report(store_dir: Path, subgraph_dir: Path | Mapping[str, Pat
         "labels_in_event_endpoints": int(len(in_events)),
         "labels_not_in_event_endpoints": int(len(positive_labels - event_endpoint_uuids)),
         "labels_in_subgraph_centers": int(len(in_centers)),
-        "labels_in_subgraph_nodes": int(len(in_subgraph_nodes)) if subgraph_node_uuids else None,
+        "labels_in_subgraph_nodes": int(len(in_subgraph_nodes)) if nodes_found else None,
         "labeled_entity_types": _by_type_for_labels(in_entities, entities),
         "sample_missing_entity_labels": _sample_values(positive_labels - entity_uuids),
         "sample_missing_event_labels": _sample_values(positive_labels - event_endpoint_uuids),
@@ -143,10 +186,10 @@ def label_coverage_report(store_dir: Path, subgraph_dir: Path | Mapping[str, Pat
             str(split): int(len(positive_labels & _uuid_set(group, "center_uuid")))
             for split, group in metadata.groupby("split")
         }
-    if not nodes.empty:
+    if nodes_found:
         report["labels_in_subgraph_nodes_by_split"] = {
-            str(split): int(len(positive_labels & _uuid_set(group, "uuid")))
-            for split, group in nodes.groupby("split")
+            split: int(len(values))
+            for split, values in sorted(subgraph_node_uuids_by_split.items())
         }
     if event_hits["endpoint_hits_by_split"]:
         report["labels_in_event_endpoints_by_split"] = {

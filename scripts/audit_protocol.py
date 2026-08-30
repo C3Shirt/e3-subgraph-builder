@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -231,14 +231,122 @@ def subgraph_split_dirs(root: Path | None) -> dict[str, Path]:
     }
 
 
-def read_subgraph_sidecars(root: Path | None) -> dict:
+def merge_semantic_coverage(
+    target: dict[str, dict[str, dict[str, int]]],
+    split: str,
+    node_type: str,
+    group: pd.DataFrame,
+) -> None:
+    row = target.setdefault(split, {}).setdefault(
+        node_type,
+        {
+            "total": 0,
+            "name_non_null": 0,
+            "path_non_null": 0,
+            "cmdline_non_null": 0,
+            "ip_non_null": 0,
+            "port_non_null": 0,
+            "any_semantic_non_null": 0,
+        },
+    )
+    row["total"] += int(len(group))
+    semantic_any = pd.Series(False, index=group.index)
+    for column in ("name", "path", "cmdline", "ip", "port"):
+        if column in group.columns:
+            present = group[column].notna()
+            row[f"{column}_non_null"] += int(present.sum())
+            semantic_any = semantic_any | present
+    row["any_semantic_non_null"] += int(semantic_any.sum())
+
+
+def stream_node_sidecar_report(split_dirs: dict[str, Path], batch_size: int) -> dict:
+    node_type_counts: dict[str, Counter[str]] = defaultdict(Counter)
+    semantic_counts: dict[str, dict[str, dict[str, int]]] = {}
+    for default_split, path in sorted(split_dirs.items()):
+        nodes_path = path / "nodes.parquet"
+        if not nodes_path.exists():
+            continue
+        available = set(parquet_columns(nodes_path))
+        columns = [column for column in ("split", "node_type", "name", "path", "cmdline", "ip", "port") if column in available]
+        if not columns:
+            continue
+        parquet_file = pq.ParquetFile(nodes_path)
+        for batch in parquet_file.iter_batches(batch_size=batch_size, columns=columns):
+            nodes = batch.to_pandas()
+            if nodes.empty:
+                continue
+            if "split" not in nodes.columns:
+                nodes["split"] = default_split
+            else:
+                nodes["split"] = nodes["split"].fillna(default_split)
+            if "node_type" not in nodes.columns:
+                nodes["node_type"] = "UNKNOWN"
+            split_values = nodes["split"].fillna(default_split).astype(str)
+            node_values = nodes["node_type"].fillna("UNKNOWN").astype(str)
+            for split, group in nodes.groupby(split_values):
+                split = str(split)
+                node_type_counts[split].update(group["node_type"].fillna("UNKNOWN").astype(str).tolist())
+            for (split, node_type), group in nodes.groupby([split_values, node_values]):
+                merge_semantic_coverage(semantic_counts, str(split), str(node_type), group)
+    return {
+        "node_type_counts_by_split": {
+            split: dict(sorted((node_type, int(count)) for node_type, count in counts.items()))
+            for split, counts in sorted(node_type_counts.items())
+        },
+        "semantic_coverage_by_split": {
+            split: dict(sorted(type_counts.items()))
+            for split, type_counts in sorted(semantic_counts.items())
+        },
+    }
+
+
+def stream_edge_sidecar_report(split_dirs: dict[str, Path], batch_size: int) -> dict:
+    event_type_counts: dict[str, Counter[str]] = defaultdict(Counter)
+    relation_counts: dict[str, Counter[str]] = defaultdict(Counter)
+    for default_split, path in sorted(split_dirs.items()):
+        edges_path = path / "edges.parquet"
+        if not edges_path.exists():
+            continue
+        available = set(parquet_columns(edges_path))
+        if "event_type" not in available:
+            continue
+        columns = ["event_type"]
+        if "split" in available:
+            columns.insert(0, "split")
+        parquet_file = pq.ParquetFile(edges_path)
+        for batch in parquet_file.iter_batches(batch_size=batch_size, columns=columns):
+            edges = batch.to_pandas()
+            if edges.empty:
+                continue
+            if "split" not in edges.columns:
+                edges["split"] = default_split
+            else:
+                edges["split"] = edges["split"].fillna(default_split)
+            edges["event_type"] = edges["event_type"].fillna("UNKNOWN").astype(str)
+            edges["relation"] = edges["event_type"].apply(relation_name)
+            split_values = edges["split"].fillna(default_split).astype(str)
+            for split, group in edges.groupby(split_values):
+                split = str(split)
+                event_type_counts[split].update(group["event_type"].tolist())
+                relation_counts[split].update(group["relation"].tolist())
+    return {
+        "relation_counts_by_split": {
+            split: dict(sorted((relation, int(count)) for relation, count in counts.items()))
+            for split, counts in sorted(relation_counts.items())
+        },
+        "event_type_counts_by_split": {
+            split: dict(sorted((event_type, int(count)) for event_type, count in counts.items()))
+            for split, counts in sorted(event_type_counts.items())
+        },
+    }
+
+
+def read_subgraph_sidecars(root: Path | None, batch_size: int) -> dict:
     split_dirs = subgraph_split_dirs(root)
     if not split_dirs:
         return {}
 
     metadata_frames = []
-    node_frames = []
-    edge_frames = []
     for split, path in sorted(split_dirs.items()):
         metadata = read_parquet(
             path / "metadata.parquet",
@@ -247,20 +355,6 @@ def read_subgraph_sidecars(root: Path | None) -> dict:
         )
         metadata["split"] = metadata["split"].fillna(split)
         metadata_frames.append(metadata)
-        nodes_path = path / "nodes.parquet"
-        if nodes_path.exists():
-            nodes = read_parquet(
-                nodes_path,
-                columns=["split", "node_type", "name", "path", "cmdline", "ip", "port"],
-                allow_missing_columns=True,
-            )
-            nodes["split"] = nodes["split"].fillna(split)
-            node_frames.append(nodes)
-        edges_path = path / "edges.parquet"
-        if edges_path.exists():
-            edges = read_parquet(edges_path, columns=["split", "event_type"], allow_missing_columns=True)
-            edges["split"] = edges["split"].fillna(split)
-            edge_frames.append(edges)
 
     metadata = pd.concat(metadata_frames, ignore_index=True)
     report = {
@@ -281,28 +375,13 @@ def read_subgraph_sidecars(root: Path | None) -> dict:
         "edges_per_subgraph": describe_series(metadata["n_edges"]),
     }
 
-    if node_frames:
-        nodes = pd.concat(node_frames, ignore_index=True)
-        report["node_type_counts_by_split"] = {
-            split: group["node_type"].fillna("UNKNOWN").astype(str).value_counts().sort_index().astype(int).to_dict()
-            for split, group in nodes.groupby("split")
-        }
-        report["semantic_coverage_by_split"] = {
-            split: semantic_coverage(group)
-            for split, group in nodes.groupby("split")
-        }
+    node_report = stream_node_sidecar_report(split_dirs, batch_size)
+    if node_report["node_type_counts_by_split"]:
+        report.update(node_report)
 
-    if edge_frames:
-        edges = pd.concat(edge_frames, ignore_index=True)
-        edges["relation"] = edges["event_type"].fillna("UNKNOWN").astype(str).apply(relation_name)
-        report["relation_counts_by_split"] = {
-            split: group["relation"].value_counts().sort_index().astype(int).to_dict()
-            for split, group in edges.groupby("split")
-        }
-        report["event_type_counts_by_split"] = {
-            split: group["event_type"].fillna("UNKNOWN").astype(str).value_counts().sort_index().astype(int).to_dict()
-            for split, group in edges.groupby("split")
-        }
+    edge_report = stream_edge_sidecar_report(split_dirs, batch_size)
+    if edge_report["relation_counts_by_split"]:
+        report.update(edge_report)
 
     return report
 
@@ -365,7 +444,7 @@ def main() -> None:
         inactivity_gap_sec=args.episode_inactivity_gap_sec,
         batch_size=args.batch_size,
     )
-    subgraph_report = read_subgraph_sidecars(args.subgraph_root)
+    subgraph_report = read_subgraph_sidecars(args.subgraph_root, args.batch_size)
     report = {
         "store_dir": str(args.store_dir),
         "subgraph_root": None if args.subgraph_root is None else str(args.subgraph_root),

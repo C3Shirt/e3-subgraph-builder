@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 from typing import Mapping
 
 import pandas as pd
+import pyarrow.parquet as pq
 
-from e3prep.io import read_parquet
+from e3prep.io import parquet_columns, read_parquet
 
 
 def describe_series(series: pd.Series) -> dict:
@@ -50,6 +52,68 @@ def _subgraph_stats(metadata: pd.DataFrame) -> dict:
     }
 
 
+def _event_store_stats(events_path: Path, batch_size: int = 250_000) -> dict:
+    if not events_path.exists():
+        return {
+            "events_total": 0,
+            "events_by_split": {},
+            "events_by_type": {},
+            "missing_actor_type": 0,
+            "missing_object_type": 0,
+            "timestamp_range_ns": {"min": None, "max": None},
+        }
+
+    available = set(parquet_columns(events_path))
+    columns = [
+        column
+        for column in ("split", "event_type", "actor_type", "object_type", "timestamp_ns")
+        if column in available
+    ]
+    total = 0
+    split_counts: Counter[str] = Counter()
+    event_type_counts: Counter[str] = Counter()
+    missing_actor_type = 0
+    missing_object_type = 0
+    timestamp_min: int | None = None
+    timestamp_max: int | None = None
+
+    parquet_file = pq.ParquetFile(events_path)
+    for batch in parquet_file.iter_batches(batch_size=batch_size, columns=columns):
+        events = batch.to_pandas()
+        total += len(events)
+        if events.empty:
+            continue
+
+        if "split" in events.columns:
+            split_counts.update(events["split"].fillna("unknown").astype(str).tolist())
+        if "event_type" in events.columns:
+            event_type_counts.update(events["event_type"].fillna("UNKNOWN").astype(str).tolist())
+        if "actor_type" in events.columns:
+            actor_type = events["actor_type"].fillna("UNKNOWN").astype(str).str.upper()
+            missing_actor_type += int((actor_type == "UNKNOWN").sum())
+        if "object_type" in events.columns:
+            object_type = events["object_type"].fillna("UNKNOWN").astype(str).str.upper()
+            missing_object_type += int((object_type == "UNKNOWN").sum())
+        if "timestamp_ns" in events.columns and events["timestamp_ns"].notna().any():
+            timestamps = events["timestamp_ns"].dropna().astype("int64")
+            batch_min = int(timestamps.min())
+            batch_max = int(timestamps.max())
+            timestamp_min = batch_min if timestamp_min is None else min(timestamp_min, batch_min)
+            timestamp_max = batch_max if timestamp_max is None else max(timestamp_max, batch_max)
+
+    return {
+        "events_total": int(total),
+        "events_by_split": dict(sorted((key, int(value)) for key, value in split_counts.items())),
+        "events_by_type": dict(sorted((key, int(value)) for key, value in event_type_counts.items())),
+        "missing_actor_type": int(missing_actor_type),
+        "missing_object_type": int(missing_object_type),
+        "timestamp_range_ns": {
+            "min": timestamp_min,
+            "max": timestamp_max,
+        },
+    }
+
+
 def build_dataset_report(store_dir: Path, subgraph_dir: Path | Mapping[str, Path] | None = None) -> dict:
     entities_path = store_dir / "entities.parquet"
     events_path = store_dir / "events.parquet"
@@ -57,33 +121,13 @@ def build_dataset_report(store_dir: Path, subgraph_dir: Path | Mapping[str, Path
 
     report: dict = {}
     entities = read_parquet(entities_path, columns=["node_type"]) if entities_path.exists() else pd.DataFrame()
-    events = (
-        read_parquet(events_path, columns=["split", "event_type", "actor_type", "object_type", "timestamp_ns"])
-        if events_path.exists()
-        else pd.DataFrame()
-    )
     labels = read_parquet(labels_path, columns=["label"]) if labels_path.exists() else pd.DataFrame()
 
     report["entities_total"] = int(len(entities))
     report["entities_by_type"] = (
         entities["node_type"].value_counts().sort_index().astype(int).to_dict() if not entities.empty else {}
     )
-    report["events_total"] = int(len(events))
-    report["events_by_split"] = events["split"].value_counts().sort_index().astype(int).to_dict() if not events.empty else {}
-    report["events_by_type"] = (
-        events["event_type"].value_counts().sort_index().astype(int).to_dict() if not events.empty else {}
-    )
-    if not events.empty:
-        report["missing_actor_type"] = int((events["actor_type"] == "UNKNOWN").sum())
-        report["missing_object_type"] = int((events["object_type"] == "UNKNOWN").sum())
-        report["timestamp_range_ns"] = {
-            "min": int(events["timestamp_ns"].dropna().min()) if events["timestamp_ns"].notna().any() else None,
-            "max": int(events["timestamp_ns"].dropna().max()) if events["timestamp_ns"].notna().any() else None,
-        }
-    else:
-        report["missing_actor_type"] = 0
-        report["missing_object_type"] = 0
-        report["timestamp_range_ns"] = {"min": None, "max": None}
+    report.update(_event_store_stats(events_path))
 
     report["malicious_entity_count"] = int((labels["label"] == 1).sum()) if not labels.empty else 0
 
